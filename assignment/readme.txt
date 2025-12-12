@@ -1,4 +1,4 @@
-pde_model为重新训练的步长为2的FNO模型，以及官方的Unet模型
+pde_model为重新训练的步长为2的FNO和Unet模型
 run_result为各个模型的跑通结果。
 others为训练及跑通模型时使用的与官方不一致的脚本。
 

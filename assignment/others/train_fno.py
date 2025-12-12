@@ -6,6 +6,8 @@ import time  # 添加时间模块
 
 import numpy as np
 import torch
+import sys, pathlib
+sys.path.append(str(pathlib.Path(__file__).resolve().parent.parent.parent / "model" / "PDEBench-main"))
 from pdebench.models.fno.fno import FNO1d, FNO2d, FNO3d
 from pdebench.models.fno.utils import FNODatasetMult, FNODatasetSingle
 from pdebench.models.metrics import metrics
