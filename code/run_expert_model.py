@@ -68,15 +68,24 @@ def load_config(config_path: Path) -> Dict[str, Any]:
 
 def _infer_weight_path(cfg: Dict[str, Any], model_family: str) -> Path:
     """
-    根据配置里的 filename 推断权重名称：
-    例如 filename=1D_Burgers_Sols_Nu1.0.hdf5 -> 1D_Burgers_Sols_Nu1.0_FNO.pt
+    根据配置里的 filename 推断权重名称，支持精确匹配和模糊匹配：
+    - 优先 filename_模型族.pt（如 1D_Burgers_Sols_Nu1.0_FNO.pt 或 ..._Unet.pt）
+    - 若未找到，尝试 filename_模型族*.pt（如 1D_Burgers_Sols_Nu1.0_Unet-PF-20.pt）
     """
     filename = Path(cfg["filename"]).stem
-    weight_name = f"{filename}_{model_family}.pt"
-    weight_path = WEIGHTS_DIR / weight_name
-    if not weight_path.exists():
-        raise FileNotFoundError(f"未找到权重文件: {weight_path}")
-    return weight_path
+    exact = WEIGHTS_DIR / f"{filename}_{model_family}.pt"
+    if exact.exists():
+        return exact
+
+    # 模糊匹配
+    pattern = f"{filename}_{model_family}*.pt"
+    candidates = sorted(WEIGHTS_DIR.glob(pattern))
+    if candidates:
+        return candidates[0]
+
+    raise FileNotFoundError(
+        f"未找到权重文件，尝试过: {exact.name} 或模式 {pattern}，目录 {WEIGHTS_DIR}"
+    )
 
 
 def _build_grid(
@@ -193,9 +202,9 @@ def predict_next_frame(
             inp = xx.reshape(xx.shape[0], xx.shape[1], -1)
             out = model(inp, grid)  # [1, x, 1, v]
         else:  # Unet
-            inp = xx.reshape(xx.shape[0], xx.shape[1], -1)  # [1, x, 2*v]
+            inp = xx.reshape(xx.shape[0], xx.shape[1], -1).permute(0, 2, 1)  # [1, x, 2*v]
             out = model(inp)  # [1, x, v]
-            out = out.unsqueeze(-2)  # 对齐成 [1, x, 1, v]
+            out = out.permute(0, 2, 1).unsqueeze(-2)  # 对齐成 [1, x, 1, v]
 
     return out.squeeze(0).squeeze(-2).cpu().numpy()  # [x, v]
 
