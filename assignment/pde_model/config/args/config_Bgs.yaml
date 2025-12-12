@@ -8,7 +8,7 @@ filename: "1D_Burgers_Sols_Nu1.0.hdf5"
 single_file: True
 reduced_resolution: 1
 # reduced_resolution_t: 5
-reduced_resolution_t: 5
+reduced_resolution_t: 1
 reduced_batch: 1
 epochs: 10
 learning_rate: 1.e-3

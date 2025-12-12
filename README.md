@@ -16,9 +16,13 @@ Workspace Layout
 
 first commit: 
   1.选择的专家模型为diff-sorp,Advection-beta4.0-FNO,Advection-beta4.0-Unet,Burgers-Nu1.0-FNO,Burgers-Nu1.0-Unet
+
   2.跑通专家模型的代码为于code/run_expert_model.py，运行code/test_run_expert_model.py可以进行测试。模型文件位于assignment/pde_model
+
   3.文生计算模块和token路由器的训练数据以及生成代码应位于data文件夹中，jsonl文件过大，因此以另外方式提交
+  
   4.hdf5数据文件同样应位于data文件夹下，文件过大，与jsonl类似不放入主文件夹
+
 
 
 以下是PiERN的介绍：

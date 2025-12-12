@@ -2,7 +2,7 @@
 命令行测试脚本：随机抽取 HDF5 数据中的样本，调用 run_expert_model 预测下一帧并与真值对比。
 
 示例：
-  python code/test_run_expert_model.py --pde-case Burgers_FNO --data data/1D_Burgers_Sols_Nu0.1.hdf5 --num-samples 3
+  python code/test_run_expert_model.py --pde-case Burgers_FNO --data data/1D_Burgers_Sols_Nu1.0.hdf5 --num-samples 3
   python code/test_run_expert_model.py --pde-case DiffSorp_FNO --data data/1D_diff-sorp_NA_NA.hdf5 --num-samples 1
 """
 
