@@ -2,7 +2,7 @@ Workspace Layout
 
 - `assignment/` – 存放专家模型相关的文件和代码 
   - `readme.txt` – 配置说明  
-  - `others/` – 训练脚本（`train_Unet.py`, `train_fno.py` 等，只更改了个别必要参数如intial_step，并添加了测试输出，使用时需进行替换，详见assignment/others/readme.txt）  
+  - `others/` – 训练脚本（`train_Unet.py`, `train_fno.py` 等，添加了测试输出并提升效率，使用时需进行替换，详见assignment/others/readme.txt）  
   - `pde_model/` – 预训练权重（FNO/Unet/PINN）及说明  
   - `run_result/` – 运行结果的 csv/pdf/pickle 及 `readme.txt`
 - `code/` – 
