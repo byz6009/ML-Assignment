@@ -32,6 +32,9 @@ from pdebench.models.unet.unet import UNet1d  # noqa: E402
 CONFIG_DIR = PROJECT_ROOT / "assignment" / "pde_model" / "config" / "args"
 WEIGHTS_DIR = PROJECT_ROOT / "assignment" / "pde_model"
 CONFIG_DIFF_SORP = CONFIG_DIR / "config_diff-sorp.yaml"
+PINN_BURGERS = WEIGHTS_DIR / "1D_Burgers_Sols_Nu1.0_PINN.pt-5000.pt"
+PINN_DIFF_SORP = WEIGHTS_DIR / "1D_diff-sorp_NA_NA_0001.h5_PINN.pt-15000.pt"
+PINN_ADVECTION = WEIGHTS_DIR / "1D_Advection_Sols_beta4.0_PINN.pt-5000.pt"
 
 
 @dataclass
@@ -39,6 +42,9 @@ class ModelSpec:
     config_file: Path
     filename_key: str  # 配置里的文件名键，如 filename: 1D_Burgers_Sols_Nu1.0.hdf5
     model_family: str  # "FNO" 或 "Unet"
+    pinn_weight: Path | None = None
+    pinn_output_relu: bool = False
+    pinn_sample: int | str | None = None
 
 
 # 支持的 PDE 案例与默认模型类型
@@ -46,11 +52,34 @@ PDE_CONFIG_MAP: Dict[str, ModelSpec] = {
     # Burgers
     "Burgers_FNO": ModelSpec(CONFIG_DIR / "config_Bgs.yaml", "filename", "FNO"),
     "Burgers_Unet": ModelSpec(CONFIG_DIR / "config_Bgs.yaml", "filename", "Unet"),
+    "Burgers_PINN": ModelSpec(
+        CONFIG_DIR / "config_Bgs.yaml",
+        "filename",
+        "PINN",
+        pinn_weight=PINN_BURGERS,
+        pinn_sample=5187,
+    ),
     # Advection
     "Advection_FNO": ModelSpec(CONFIG_DIR / "config_Adv.yaml", "filename", "FNO"),
     "Advection_Unet": ModelSpec(CONFIG_DIR / "config_Adv.yaml", "filename", "Unet"),
-    # Diffusion-Sorption 1D（仅 FNO 权重）
+    "Advection_PINN": ModelSpec(
+        CONFIG_DIR / "config_Adv.yaml",
+        "filename",
+        "PINN",
+        pinn_weight=PINN_ADVECTION,
+        pinn_sample=8648,
+    ),
+    # Diffusion-Sorption 1D
     "DiffSorp_FNO": ModelSpec(CONFIG_DIFF_SORP, "filename", "FNO"),
+    "DiffSorp_Unet": ModelSpec(CONFIG_DIFF_SORP, "filename", "Unet"),
+    "DiffSorp_PINN": ModelSpec(
+        CONFIG_DIFF_SORP,
+        "filename",
+        "PINN",
+        pinn_weight=PINN_DIFF_SORP,
+        pinn_output_relu=True,
+        pinn_sample="1",
+    ),
 }
 
 
@@ -86,6 +115,54 @@ def _infer_weight_path(cfg: Dict[str, Any], model_family: str) -> Path:
     raise FileNotFoundError(
         f"未找到权重文件，尝试过: {exact.name} 或模式 {pattern}，目录 {WEIGHTS_DIR}"
     )
+
+
+class PINNNet(torch.nn.Module):
+    def __init__(self, layer_sizes: Tuple[int, ...], output_relu: bool = False):
+        super().__init__()
+        self.linears = torch.nn.ModuleList()
+        for in_dim, out_dim in zip(layer_sizes[:-1], layer_sizes[1:]):
+            self.linears.append(torch.nn.Linear(in_dim, out_dim))
+        self.act = torch.nn.Tanh()
+        self.output_relu = output_relu
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        for idx, layer in enumerate(self.linears):
+            x = layer(x)
+            if idx < len(self.linears) - 1:
+                x = self.act(x)
+        if self.output_relu:
+            x = torch.relu(x)
+        return x
+
+
+def _infer_pinn_layers(state_dict: Dict[str, torch.Tensor]) -> Tuple[int, ...]:
+    weight_keys = [
+        key for key in state_dict if key.startswith("linears.") and key.endswith(".weight")
+    ]
+    weight_keys.sort(key=lambda k: int(k.split(".")[1]))
+    if not weight_keys:
+        raise ValueError("PINN 权重不包含 linears.*.weight")
+    layer_sizes = [state_dict[weight_keys[0]].shape[1]]
+    for key in weight_keys:
+        layer_sizes.append(state_dict[key].shape[0])
+    return tuple(layer_sizes)
+
+
+@lru_cache()
+def _load_pinn_model(
+    weight_path: str, output_relu: bool, device_str: str
+) -> PINNNet:
+    checkpoint = torch.load(weight_path, map_location=device_str)
+    state_dict = (
+        checkpoint["model_state_dict"] if "model_state_dict" in checkpoint else checkpoint
+    )
+    layer_sizes = _infer_pinn_layers(state_dict)
+    model = PINNNet(layer_sizes, output_relu=output_relu)
+    model.load_state_dict(state_dict)
+    model.to(device_str)
+    model.eval()
+    return model
 
 
 def _build_grid(
@@ -154,6 +231,8 @@ def predict_next_frame(
     spec = PDE_CONFIG_MAP[pde_case]
     cfg = load_config(spec.config_file)
     initial_step = cfg.get("initial_step", 2)
+    if spec.model_family == "PINN":
+        raise ValueError("PINN 需要坐标与时间输入，请使用 predict_pinn")
     if len(frames) != initial_step:
         raise ValueError(
             f"该模型需要 {initial_step} 帧作为输入，当前提供 {len(frames)} 帧"
@@ -209,7 +288,42 @@ def predict_next_frame(
     return out.squeeze(0).squeeze(-2).cpu().numpy()  # [x, v]
 
 
-__all__ = ["predict_next_frame"]
+def predict_pinn(
+    pde_case: str,
+    coords: np.ndarray,
+    device: str | torch.device = "cpu",
+) -> np.ndarray:
+    """
+    PINN 预测：输入坐标与时间，输出对应的解。
+
+    参数
+    ----
+    coords: np.ndarray
+        形状 [n, 2]，每行是 [x, t]。
+    """
+    if pde_case not in PDE_CONFIG_MAP:
+        raise ValueError(f"不支持的 pde_case: {pde_case}，可选: {list(PDE_CONFIG_MAP)}")
+
+    spec = PDE_CONFIG_MAP[pde_case]
+    if spec.model_family != "PINN":
+        raise ValueError(f"{pde_case} 不是 PINN 模型")
+    if spec.pinn_weight is None:
+        raise ValueError(f"{pde_case} 未配置 PINN 权重路径")
+
+    coords = np.asarray(coords, dtype=np.float32)
+    if coords.ndim != 2 or coords.shape[1] != 2:
+        raise ValueError(f"coords 应为 [n,2]，当前 {coords.shape}")
+
+    device = torch.device(device)
+    model = _load_pinn_model(
+        str(spec.pinn_weight), spec.pinn_output_relu, str(device)
+    )
+    with torch.no_grad():
+        out = model(torch.from_numpy(coords).to(device))
+    return out.cpu().numpy()
+
+
+__all__ = ["predict_next_frame", "predict_pinn", "PDE_CONFIG_MAP", "load_config"]
 if "__main__" == __name__:
     # 简单测试
     x = np.linspace(-1, 1, 1024, dtype=np.float32)

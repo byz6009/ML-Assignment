@@ -3,22 +3,31 @@ Workspace Layout
 - `assignment/` – 存放专家模型相关的文件和代码 
   - `readme.txt` – 配置说明  
   - `others/` – 训练脚本（`train_Unet.py`, `train_fno.py` 等，只更改了个别必要参数如intial_step，并添加了测试输出，完全没有改变代码逻辑和超参数,使用时需进行替换，详见assignment/others/readme.txt）  
-  - `pde_model/` – 预训练权重（FNO/Unet）及说明  
+  - `pde_model/` – 预训练权重（FNO/Unet/PINN）及说明  
   - `run_result/` – 运行结果的 csv/pdf/pickle 及 `readme.txt`
-- `code/` – PiERN 运行专家模型代码以及训练与推理脚本（`run_expert_model.py` 等）
-- `data/` – 训练与采样所使用的数据集jsonl生成代码以及 jsonl 数据
-- `model/` – 模型文件与依赖 
-  - `capacity_expert_model.pt`  
-  - `PDEBench-main/` – 上游 PDEBench 项目，运行过程中只从中引入模型定义，不使用
-- `.vscode/` – VS Code 项目设置（为防止python解释器报错，可无视）
+- `code/` – 
+  - `model_eval_outputs`: 重新训练后专家模型的测试结果统计及可视化
+  - `burgers_piern_infer.py`: PiERN 融合代码
+  - `burgers_piern_results.txt`: 融合代码初步测试结果
+  - `run_expert_model.py`: 运行专家模型代码
+  - `test_run_expert_model.py`: 测试指定的专家模型，可以调整测试方式和样本数
+  - `test_all_models.py`：测试所有的专家模型，得到统计结果的可视化输出
+  - `train_burgers_lora_mlp_run4_e50.py`: 文生计算模块训练代码
+  - `train_token_router_Burgers.py`: 路由器模块训练代码
+- `data/` – 训练与采样所使用的数据集jsonl生成代码以及jsonl数据
+- `model/` – 模型文件与依赖，运行时应包含Qwen2.5-7B-Instruct模型、文生和路由器模型文件。部分文件没有上传至github，见说明
+- `PDEBench-main/` – 上游 PDEBench 项目，运行过程中只从中引入模型定义，不使用
+- `.vscode/` – VS Code 项目设置（为防止python解解器报错，可无视）
 - `PiERN.pdf` – 论文 PDF
 - `requirements.txt` – 依赖列表
 
 first commit: 
-- 选择的专家模型为diff-sorp,Advection-beta4.0-FNO,Advection-beta4.0-Unet,Burgers-Nu1.0-FNO,Burgers-Nu1.0-Unet
-- 跑通专家模型的代码为于code/run_expert_model.py，运行code/test_run_expert_model.py可以进行测试。模型文件位于assignment/pde_model
-- 文生计算模块和token路由器的训练数据以及生成代码应位于data文件夹中，jsonl文件过大，因此以另外方式提交
-- hdf5数据文件同样应位于data文件夹下，文件过大，与jsonl类似不放入主文件夹
+1. 选择的问题为diff-sorp,Advection-beta4.0,Burgers-Nu1.0，每个问题都包含了FNO，Unet，PINN三个模型。后续打算对三个FNO模型进行训练文生和token路由器模块
+2. 跑通专家模型的代码为于code/run_expert_model.py，运行code/test_run_expert_model.py可以进行测试，运行code/test_all_models.py可以对所有模型做测试并可视化统计结果。模型文件位于assignment/pde_model。组装代码为code/burgers_piern_inter.py。
+3. 文生计算模块的训练数据应位于data文件夹中，但jsonl文件过大，因此以网盘方式提交。模型文件位于model/文件夹下，包括head_best_lora_mlp_run4_e50_b10_ga1_se250.pt和lora_best_lora_mlp_run4_e50_b10_ga1_se250.pt
+4. token路由器的训练数据jsonl位于data文件夹中,但是模型文件过大，同样以网盘方式提交。
+4. hdf5数据文件采用对应的官方数据集，同样应位于data文件夹下，文件过大，与不放入主文件夹与网盘中
+
 
 
 

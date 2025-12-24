@@ -6,7 +6,7 @@ t_train: 200
 model_update: 1
 filename: "1D_Burgers_Sols_Nu1.0.hdf5"
 single_file: True
-reduced_resolution: 1
+reduced_resolution: 4
 # reduced_resolution_t: 5
 reduced_resolution_t: 5
 reduced_batch: 1

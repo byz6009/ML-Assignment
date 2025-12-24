@@ -24,4 +24,4 @@ modes: 12
 width: 20
 scheduler_step: 100
 scheduler_gamma: 0.5
-initial_step: 10
+initial_step: 2

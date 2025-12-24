@@ -3,7 +3,7 @@ if_training: False
 continue_training: False
 num_workers: 2
 batch_size: 50
-initial_step: 10
+initial_step: 2
 t_train: 101
 model_update: 10
 filename: "1D_diff-sorp_NA_NA"

@@ -181,7 +181,7 @@ class UNetDatasetSingle(Dataset):
         """
 
         # Define path to files
-        root_path = Path(saved_folder + filename).resolve()
+        root_path = (Path(saved_folder) / filename).resolve()
         assert filename[-2:] != "h5", "HDF5 data is assumed!!"
 
         with h5py.File(root_path, "r") as f:

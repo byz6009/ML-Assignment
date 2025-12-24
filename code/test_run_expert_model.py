@@ -2,8 +2,9 @@
 命令行测试脚本：随机抽取 HDF5 数据中的样本，调用 run_expert_model 预测下一帧并与真值对比。
 
 示例：
-  python code/test_run_expert_model.py --pde-case Burgers_FNO --data data/1D_Burgers_Sols_Nu1.0.hdf5 --num-samples 3
+  /bin/python3 code/test_run_expert_model.py --pde-case Burgers_FNO --data data/1D_Burgers_Sols_Nu1.0.hdf5 --num-samples 3
   python code/test_run_expert_model.py --pde-case DiffSorp_FNO --data data/1D_diff-sorp_NA_NA.hdf5 --num-samples 1
+  python code/test_run_expert_model.py --pde-case DiffSorp_Unet --data data/1D_diff-sorp_NA_NA.hdf5 --num-samples 1
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from run_expert_model import (
     PDE_CONFIG_MAP,
     load_config,
     predict_next_frame,
+    predict_pinn,
 )
 
 
@@ -94,6 +96,138 @@ def _find_coords(f: h5py.File, target_len: int | None = None) -> np.ndarray | No
             if arr.ndim == 1 and (target_len is None or arr.shape[0] == target_len):
                 return arr
     return None
+
+
+def _normalize_pinn_sample_id(
+    sample_id: str | int | None, f: h5py.File
+) -> str | int:
+    if "tensor" in f:
+        if sample_id is None:
+            raise ValueError("PINN 需要指定样本索引")
+        try:
+            sample_int = int(sample_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"样本索引无效: {sample_id}") from exc
+        if sample_int < 0 or sample_int >= f["tensor"].shape[0]:
+            raise ValueError(f"样本索引超出范围: {sample_int}")
+        return sample_int
+
+    if sample_id is None:
+        raise ValueError("PINN 需要指定样本 seed")
+    if isinstance(sample_id, int):
+        key = f"{sample_id:04d}"
+    else:
+        key = str(sample_id)
+        if key.isdigit() and len(key) < 4:
+            key = key.zfill(4)
+    if key not in f:
+        raise ValueError(f"样本 seed 不存在: {key}")
+    return key
+
+
+def _load_pinn_data(
+    data_path: Path, sample_id: str | int | None
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, str | int]:
+    with h5py.File(data_path, "r") as f:
+        sample_id = _normalize_pinn_sample_id(sample_id, f)
+        if "tensor" in f:
+            data = np.array(f["tensor"][sample_id], dtype=np.float32)  # [t, x]
+            x = np.array(f["x-coordinate"], dtype=np.float32)
+            t = np.array(f["t-coordinate"], dtype=np.float32)[: data.shape[0]]
+        else:
+            group = f[sample_id]
+            data = np.array(group["data"], dtype=np.float32)
+            if data.ndim == 3:
+                data = data[..., 0]
+            x = np.array(group["grid"]["x"], dtype=np.float32)
+            t = np.array(group["grid"]["t"], dtype=np.float32)
+    return data, x, t, sample_id
+
+
+def _select_time_indices(t_len: int, count: int) -> np.ndarray:
+    count = min(count, t_len)
+    if count <= 1:
+        return np.array([0], dtype=int)
+    return np.linspace(0, t_len - 1, num=count, dtype=int)
+
+
+def _predict_pinn_frame(
+    pde_case: str, x_coords: np.ndarray, t_value: float, device: str
+) -> np.ndarray:
+    coords = np.stack(
+        [x_coords, np.full_like(x_coords, t_value, dtype=np.float32)], axis=1
+    )
+    pred = predict_pinn(pde_case, coords, device=device)
+    return pred.reshape(-1)
+
+
+def _search_pinn_sample(
+    data_path: Path,
+    pde_case: str,
+    device: str,
+    topk: int = 5,
+    max_samples: int | None = None,
+) -> list[tuple[str | int, float]]:
+    with h5py.File(data_path, "r") as f:
+        if "tensor" in f:
+            tensor = f["tensor"]
+            x = np.array(f["x-coordinate"], dtype=np.float32)
+            t = np.array(f["t-coordinate"], dtype=np.float32)[: tensor.shape[1]]
+            x_slice = slice(0, x.shape[0], 1)
+            t_idx = _select_time_indices(tensor.shape[1], 100)
+            x_sel = x[x_slice]
+            t_sel = t[t_idx]
+            xx, tt = np.meshgrid(x_sel, t_sel, indexing="ij")
+            coords = np.stack([xx.ravel(), tt.ravel()], axis=1)
+            pred = predict_pinn(pde_case, coords, device=device).reshape(xx.shape)
+
+            sample_slice = slice(0, max_samples) if max_samples else slice(None)
+            data_sub = tensor[sample_slice, t_idx, x_slice]
+            data_sub = np.transpose(data_sub, (0, 2, 1))  # [n, x, t]
+            diff = data_sub - pred[None, ...]
+            print(data_sub[9991])
+            print(pred)
+            mse = np.mean(diff**2, axis=(1, 2))
+            rmse = np.sqrt(mse)
+            denom = np.sqrt(np.mean(data_sub**2, axis=(1, 2))) + 1e-12
+            nrmse = rmse / denom
+
+            idxs = np.argsort(nrmse)[:topk]
+            return [(int(i), float(nrmse[i])) for i in idxs]
+
+        keys = sorted(f.keys())
+        if max_samples:
+            keys = keys[:max_samples]
+        group0 = f[keys[0]]
+        x = np.array(group0["grid"]["x"], dtype=np.float32)
+        t = np.array(group0["grid"]["t"], dtype=np.float32)
+        x_slice = slice(0, x.shape[0], 16)
+        t_idx = np.arange(t.shape[0])
+        x_sel = x[x_slice]
+        t_sel = t[t_idx]
+        xx, tt = np.meshgrid(x_sel, t_sel, indexing="ij")
+        coords = np.stack([xx.ravel(), tt.ravel()], axis=1)
+        pred = predict_pinn(pde_case, coords, device=device).reshape(xx.shape)
+
+        best: list[tuple[float, str]] = []
+        for seed in keys:
+            group = f[seed]
+            data = np.array(group["data"], dtype=np.float32)
+            data = data[t_idx, x_slice, 0]
+            data = np.transpose(data, (1, 0))  # [x, t]
+            diff = data - pred
+            mse = np.mean(diff**2)
+            rmse = np.sqrt(mse)
+            denom = np.sqrt(np.mean(data**2)) + 1e-12
+            nrmse = rmse / denom
+            if len(best) < topk:
+                best.append((nrmse, seed))
+                best.sort()
+            elif nrmse < best[-1][0]:
+                best[-1] = (nrmse, seed)
+                best.sort()
+
+        return [(seed, float(err)) for err, seed in best]
 
 
 def _prepare_sample(
@@ -197,6 +331,29 @@ def main():
         default="cpu",
         help="推理设备，例如 cpu 或 cuda:0",
     )
+    parser.add_argument(
+        "--pinn-sample",
+        type=str,
+        default=None,
+        help="PINN 模型对应的样本索引或 seed（可选，默认使用内置配置）。",
+    )
+    parser.add_argument(
+        "--pinn-search",
+        action="store_true",
+        help="搜索最匹配的 PINN 样本/seed（会忽略 --pinn-sample）。",
+    )
+    parser.add_argument(
+        "--pinn-search-topk",
+        type=int,
+        default=5,
+        help="PINN 搜索时输出前 K 个结果。",
+    )
+    parser.add_argument(
+        "--pinn-search-max",
+        type=int,
+        default=None,
+        help="PINN 搜索时仅扫描前 N 个样本/seed。",
+    )
     args = parser.parse_args()
 
     spec = PDE_CONFIG_MAP[args.pde_case]
@@ -218,6 +375,63 @@ def main():
         raise FileNotFoundError(f"未找到数据文件: {data_path}")
 
     rng = np.random.default_rng(args.seed)
+
+    if spec.model_family == "PINN":
+        if args.pinn_search:
+            results = _search_pinn_sample(
+                data_path,
+                args.pde_case,
+                device=args.device,
+                topk=args.pinn_search_topk,
+                max_samples=args.pinn_search_max,
+            )
+            print("PINN 匹配结果（topK）：")
+            for rank, (sample_id, score) in enumerate(results, start=0):
+                print(f"  {rank}. sample={sample_id}, nRMSE={score:.6f}")
+            return
+
+        sample_id = args.pinn_sample if args.pinn_sample is not None else spec.pinn_sample
+        data, x_coords, t_coords, sample_id = _load_pinn_data(
+            data_path, sample_id
+        )
+        x_indices = np.arange(0, x_coords.shape[0], rr, dtype=int)
+        t_indices = np.arange(0, t_coords.shape[0], rr_t, dtype=int)
+        if len(x_indices) == 0 or len(t_indices) == 0:
+            raise ValueError("下采样导致空数据，请检查 rr/rr_t 设置")
+
+        print(
+            f"载入 PINN 数据: sample={sample_id}, data_shape={data.shape}, "
+            f"rr={rr}, rr_t={rr_t}"
+        )
+
+        mse_list, nrmse_list, max_list = [], [], []
+        for i in range(args.num_samples):
+            t_idx = int(rng.choice(t_indices))
+            # t_idx = 30
+            t_val = float(t_coords[t_idx])
+            pred = _predict_pinn_frame(
+                args.pde_case, x_coords[x_indices], t_val, args.device
+            )
+            target = data[t_idx, x_indices]
+
+            mse, nrmse, max_err = _metrics(pred, target)
+            mse_list.append(mse)
+            nrmse_list.append(nrmse)
+            max_list.append(max_err)
+
+            print(
+                f"[{i+1}/{args.num_samples}] sample={sample_id}, "
+                f"t_idx={t_idx} (t={t_val:.4f})"
+            )
+            print("  pred[:5]  :", np.asarray(pred).reshape(-1)[:5])
+            print("  target[:5]:", np.asarray(target).reshape(-1)[:5])
+            print(f"  MSE={mse:.4e}, nRMSE={nrmse:.4e}, max|err|={max_err:.4e}")
+
+        print("\n整体平均：")
+        print(
+            f"  MSE={np.mean(mse_list):.4e}, nRMSE={np.mean(nrmse_list):.4e}, max|err|={np.mean(max_list):.4e}"
+        )
+        return
 
     with h5py.File(data_path, "r") as f:
         arr = _find_dataset(f)
